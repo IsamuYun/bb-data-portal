@@ -1,0 +1,10 @@
+**/node_modules
+**/.next
+**/.output
+**/.wxt
+**/dist
+.git
+data
+docs
+.env*
+!.env.example

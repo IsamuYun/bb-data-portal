@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+allowBuilds:
+  unrs-resolver: true
+  esbuild: true
+  sharp: true
+  bcrypt: true
+  "@tailwindcss/oxide": true
+  spawn-sync: true

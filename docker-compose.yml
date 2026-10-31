@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bb}
+      POSTGRES_DB: ${POSTGRES_DB:-bb}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bb} -d ${POSTGRES_DB:-bb}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-bb}:${POSTGRES_PASSWORD:-bb}@postgres:5432/${POSTGRES_DB:-bb}
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin1234}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+    volumes:
+      - media:/data/media
+      - exports:/data/exports
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  pgdata:
+  media:
+  exports:
