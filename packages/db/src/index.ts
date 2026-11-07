@@ -4,7 +4,8 @@ import * as schema from "./schema";
 
 export * from "./schema";
 export { schema };
-export { eq, and, or, desc, asc, sql, count, inArray, isNull, lt, gt } from "drizzle-orm";
+export type { SQL } from "drizzle-orm";
+export { eq, ne, and, or, not, desc, asc, sql, count, inArray, notInArray, isNull, isNotNull, lt, gt, gte, lte, ilike, like, getTableColumns } from "drizzle-orm";
 
 export function getDatabaseUrl() {
   const url = process.env.DATABASE_URL;

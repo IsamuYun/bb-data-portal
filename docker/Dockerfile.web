@@ -6,10 +6,17 @@ WORKDIR /repo
 FROM base AS deps
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY apps/web/package.json apps/web/
+COPY apps/extension/package.json apps/extension/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --filter @bb/web... --filter @bb/db... --filter @bb/shared...
+    pnpm install --frozen-lockfile --filter @bb/web... --filter @bb/db... --filter @bb/shared... --filter @bb/extension...
+
+# Chrome extension zip, served from the admin "设置" page for "load unpacked" installs.
+FROM deps AS ext
+COPY packages/shared packages/shared
+COPY apps/extension apps/extension
+RUN pnpm --filter @bb/extension zip && mkdir -p /ext && cp apps/extension/dist/*.zip /ext/
 
 FROM deps AS build
 COPY apps/web apps/web
@@ -19,13 +26,14 @@ RUN pnpm --filter @bb/web build
 
 FROM node:22-alpine AS runner
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000 \
-    MEDIA_DIR=/data/media MIGRATIONS_DIR=/app/drizzle
+    MEDIA_DIR=/data/media EXPORT_DIR=/data/exports MIGRATIONS_DIR=/app/drizzle EXT_ZIP_DIR=/app/ext
 WORKDIR /app
 RUN addgroup -S app && adduser -S app -G app && mkdir -p /data/media /data/exports && chown -R app:app /data
 COPY --from=build --chown=app:app /repo/apps/web/.next/standalone ./
 COPY --from=build --chown=app:app /repo/apps/web/.next/static ./apps/web/.next/static
 COPY --from=build --chown=app:app /repo/apps/web/public ./apps/web/public
 COPY --from=build --chown=app:app /repo/packages/db/drizzle ./drizzle
+COPY --from=ext --chown=app:app /ext ./ext
 USER app
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1

@@ -1,0 +1,1 @@
+ALTER TABLE "records" ADD COLUMN "manual" jsonb DEFAULT '{}'::jsonb NOT NULL;

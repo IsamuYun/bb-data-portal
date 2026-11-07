@@ -18,4 +18,9 @@ export async function bootstrapDatabase() {
   console.log(`[boot] applying migrations from ${folder}`);
   await runMigrations(folder);
   await seed({ log: (m) => console.log(`[boot] ${m}`) });
+  // Derived fields of raw page captures follow the current parser (no re-collection needed).
+  const { rederiveFairfaxMedical, rederiveFairfaxReports } = await import("./fairfax/rederive");
+  await rederiveFairfaxMedical((m) => console.log(`[boot] ${m}`)).catch((e) => console.warn("[boot] fairfax medical re-derive failed", e));
+  // Not awaited: PDF parsing / cropping must not delay the server becoming ready.
+  void rederiveFairfaxReports((m) => console.log(`[boot] ${m}`)).catch((e) => console.warn("[boot] fairfax report re-derive failed", e));
 }

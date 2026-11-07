@@ -1,0 +1,1 @@
+ALTER TABLE "jobs" ADD COLUMN "dry_run" boolean DEFAULT false NOT NULL;

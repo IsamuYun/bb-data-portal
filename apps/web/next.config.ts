@@ -13,6 +13,10 @@ const nextConfig: NextConfig = {
     },
   },
   transpilePackages: ["@bb/db", "@bb/shared"],
+  // Export libraries use native modules / their own reconciler; keep them out of the bundle.
+  serverExternalPackages: ["@react-pdf/renderer", "sharp", "exceljs"],
+  // PDF fonts are read from disk at runtime; include them in the standalone output.
+  outputFileTracingIncludes: { "/**/*": ["./assets/fonts/*.ttf"] },
 };
 
 export default nextConfig;

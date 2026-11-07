@@ -4,13 +4,34 @@
     <meta charset="UTF-8" />
     <title>BB Collector</title>
     <style>
-      body { font: 13px system-ui, sans-serif; margin: 0; padding: 12px; width: 260px; }
-      h1 { font-size: 14px; margin: 0 0 8px; }
-      p { color: #666; margin: 0; }
+      body { font: 13px system-ui, sans-serif; margin: 0; padding: 12px; width: 280px; color: #222; }
+      h1 { font-size: 14px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; }
+      .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #eee; }
+      .pill.running { background: #dbeafe; color: #1e40af; } .pill.idle, .pill.polling { background: #dcfce7; color: #166534; }
+      .pill.paused { background: #fef3c7; color: #92400e; } .pill.error, .pill.unpaired { background: #fee2e2; color: #991b1b; }
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; margin: 8px 0; }
+      dt { color: #666; } dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row { display: flex; gap: 6px; margin-top: 8px; }
+      button { flex: 1; padding: 6px 8px; border-radius: 6px; border: 1px solid #ccc; background: #fff; font: inherit; cursor: pointer; }
+      button.primary { background: #222; color: #fff; border-color: #222; }
+      .err { color: #991b1b; white-space: pre-wrap; margin-top: 6px; }
     </style>
   </head>
   <body>
-    <h1>BB Collector</h1>
-    <p>尚未配对。配对与任务执行将在 M2 实现。</p>
+    <h1>BB Collector <span id="phase" class="pill"></span></h1>
+    <dl>
+      <dt>服务器</dt><dd id="server">—</dd>
+      <dt>设备</dt><dd id="device">—</dd>
+      <dt>当前任务</dt><dd id="job">—</dd>
+      <dt>本次统计</dt><dd id="stats">—</dd>
+      <dt>最近轮询</dt><dd id="poll">—</dd>
+    </dl>
+    <div id="err" class="err" hidden></div>
+    <div class="row">
+      <button id="toggle" class="primary">暂停</button>
+      <button id="tick">立即检查</button>
+      <button id="options">设置</button>
+    </div>
+    <script type="module" src="./main.ts"></script>
   </body>
 </html>

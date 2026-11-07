@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, verifySession } from "@/lib/session";
 
-const PUBLIC = [/^\/login$/, /^\/api\/ext\//, /^\/api\/health$/];
+const PUBLIC = [/^\/login$/, /^\/api\/ext\//, /^\/api\/health$/, /^\/test-page\//];
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;

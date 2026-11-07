@@ -14,7 +14,8 @@ services:
       timeout: 3s
       retries: 20
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Host-only by default: Docker-published ports bypass the host firewall (UFW).
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
 
   web:
     build:
@@ -30,11 +31,17 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin1234}
       APP_URL: ${APP_URL:-http://localhost:3000}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      QWEN_MODEL: ${QWEN_MODEL:-}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-}
+      TRANSLATE_PROVIDER: ${TRANSLATE_PROVIDER:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - media:/data/media
       - exports:/data/exports
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      # 0.0.0.0 = reachable on the LAN; behind a reverse proxy set WEB_BIND=127.0.0.1 (docs/deploy-ubuntu-24.md).
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-3000}:3000"
 
 volumes:
   pgdata:

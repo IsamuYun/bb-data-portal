@@ -3,6 +3,7 @@ import {
   Database,
   Download,
   FileSpreadsheet,
+  Languages,
   LayoutDashboard,
   ListChecks,
   MonitorSmartphone,
@@ -31,6 +32,7 @@ export const navGroups: { label: string; items: NavItem[] }[] = [
     items: [
       { title: "记录", href: "/records", icon: Database },
       { title: "导出", href: "/exports", icon: Download },
+      { title: "翻译字典", href: "/dictionary", icon: Languages },
     ],
   },
   {

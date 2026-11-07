@@ -48,7 +48,10 @@ export const users = pgTable("users", {
 });
 
 /** A field template tells the UI/exports which columns a platform produces. */
-export type FieldSchema = { key: string; label: string; type: "string" | "number" | "string[]" | "text" | "url" }[];
+/** How a field is translated: `dict` = fixed vocabulary via the dictionary, `llm` = free text via the model, `none` = kept as is. */
+export type TranslateMode = "none" | "dict" | "llm";
+/** `json`: structured value (e.g. an array of objects) shown as a small table; never translated, not a list column. */
+export type FieldSchema = { key: string; label: string; type: "string" | "number" | "string[]" | "text" | "url" | "json"; translate?: TranslateMode }[];
 
 export const platforms = pgTable("platforms", {
   id: id(),
@@ -124,6 +127,8 @@ export const jobs = pgTable(
     leasedBy: uuid("leased_by").references(() => devices.id, { onDelete: "set null" }),
     leaseUntil: timestamp("lease_until", { withTimezone: true }),
     lastError: text("last_error"),
+    /** Recipe dry run from the admin UI: executed like any job, but the result is not stored as a record. */
+    dryRun: boolean("dry_run").notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -147,20 +152,38 @@ export const jobRuns = pgTable("job_runs", {
   finishedAt: timestamp("finished_at", { withTimezone: true }),
 });
 
+/**
+ * One captured donor profile. `seq` is the portal's own auto-increment donor number (stable across sources);
+ * the data source is `platformId` (e.g. cryobank) and `externalId` is the donor's ID within that source.
+ */
+/** One carrier row as it is printed (Chinese disease name, optional English name). */
+export type ManualCarrier = { gene: string; disease: string; diseaseEn?: string; status?: string };
+/** Hand-curated carrier screening: `none` = no carriers found, `carrier` = the listed rows. */
+export type ManualCarriers = { kind: "none" | "carrier"; panel: string; items: ManualCarrier[]; updatedAt: string };
+export type RecordManual = { carriers?: ManualCarriers };
+
 export const records = pgTable(
   "records",
   {
     id: id(),
+    seq: integer("seq").notNull().generatedByDefaultAsIdentity(),
+    /** Data source the donor comes from. */
     platformId: uuid("platform_id").notNull().references(() => platforms.id, { onDelete: "cascade" }),
+    /** The donor's ID inside the source (cryobank donor number for cryobank). */
     externalId: text("external_id").notNull(),
     version: integer("version").notNull().default(1),
     data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+    /**
+     * Hand-curated corrections (record edit page). Kept out of `data`, which a re-collection replaces and the report
+     * parsers rewrite; the profile export prefers these over the parsed values.
+     */
+    manual: jsonb("manual").$type<RecordManual>().notNull().default({}),
     sourceUrl: text("source_url").notNull(),
     jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex("records_platform_external_uq").on(t.platformId, t.externalId)],
+  (t) => [uniqueIndex("records_platform_external_uq").on(t.platformId, t.externalId), uniqueIndex("records_seq_uq").on(t.seq)],
 );
 
 export const media = pgTable(
@@ -182,6 +205,44 @@ export const media = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("media_sha_idx").on(t.sha256), index("media_record_idx").on(t.recordId)],
+);
+
+/** Cached machine translation of a record's data (keyed by record + language; sourceHash detects re-captures). */
+export const recordTranslations = pgTable(
+  "record_translations",
+  {
+    id: id(),
+    recordId: uuid("record_id").notNull().references(() => records.id, { onDelete: "cascade" }),
+    lang: text("lang").notNull(),
+    sourceHash: text("source_hash").notNull(),
+    data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+    model: text("model"),
+    /** True when some fields are still untranslated (dictionary gaps or no model credentials); retried later. */
+    pending: boolean("pending").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("record_translations_record_lang_uq").on(t.recordId, t.lang)],
+);
+
+/**
+ * Translation dictionary for fixed vocabularies (colors, ethnicity, education...). `fieldKey` scopes an entry to one
+ * field ("English" is 英格兰 as ancestry but 英语 as area of study); an empty fieldKey is a global fallback.
+ * `target` null = seen in data but not translated yet.
+ */
+export const dictionaryEntries = pgTable(
+  "dictionary_entries",
+  {
+    id: id(),
+    lang: text("lang").notNull().default("zh"),
+    fieldKey: text("field_key").notNull().default(""),
+    source: text("source").notNull(),
+    target: text("target"),
+    /** "seed" | "manual" | "llm" | "scan" */
+    origin: text("origin").notNull().default("manual"),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("dictionary_entries_uq").on(t.lang, t.fieldKey, t.source)],
 );
 
 export const exports = pgTable("exports", {

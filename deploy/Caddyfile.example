@@ -1,0 +1,22 @@
+# /etc/caddy/Caddyfile — HTTPS reverse proxy for bb-data-portal (certificates are obtained automatically).
+# Replace portal.example.com with the domain whose A record points at this server; APP_URL in .env must match.
+portal.example.com {
+	encode zstd gzip
+	# Media uploads from the extension are up to 50 MB (MAX_MEDIA_BYTES).
+	request_body {
+		max_size 60MB
+	}
+	reverse_proxy 127.0.0.1:3000 {
+		# Profile export may wait up to 60 s for translation; batch exports run in the background.
+		transport http {
+			read_timeout 180s
+			write_timeout 180s
+		}
+	}
+	log {
+		output file /var/log/caddy/bb-data-portal.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+	}
+}

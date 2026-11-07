@@ -7,6 +7,13 @@ export const env = {
   get MEDIA_DIR() {
     return process.env.MEDIA_DIR ?? "./data/media";
   },
+  get EXPORT_DIR() {
+    return process.env.EXPORT_DIR ?? "./data/exports";
+  },
+  /** Folder holding the built extension zip(s); the newest one is offered for download. */
+  get EXT_ZIP_DIR() {
+    return process.env.EXT_ZIP_DIR ?? "../extension/dist";
+  },
   get APP_URL() {
     return process.env.APP_URL ?? "http://localhost:3000";
   },
