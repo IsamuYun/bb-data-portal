@@ -1,13 +1,13 @@
 # 部署到 Ubuntu 24.04（生产环境）
 
-本文是把 bb-data-portal 部署到一台 Ubuntu 24.04 服务器的完整步骤：从新机器初始化，到 HTTPS、数据迁移、插件切换、备份和升级。README 第 1 节是本机 / 局域网的快速部署，本文是对外提供服务时的做法。
+本文是把 bb-data-portal 部署到一台 Ubuntu 24.04 服务器的完整步骤：从新机器初始化，到 HTTPS（Nginx + Cloudflare）、数据迁移、插件切换、备份和升级。README 第 1 节是本机 / 局域网的快速部署，本文是对外提供服务时的做法。
 
 ## 0. 方案概览
 
 ```
- 你的 Chrome（已登录 cryobank / fairfax）            Ubuntu 24.04 服务器
- ┌──────────────────────────┐   HTTPS 443   ┌──────────────────────────────────────────────┐
- │ bb 插件：领任务、采集、    │ ────────────▶ │ Caddy（自动申请/续期证书）                    │
+ 你的 Chrome（已登录 cryobank / fairfax）   Cloudflare（代理，边缘证书）     Ubuntu 24.04 服务器
+ ┌──────────────────────────┐   HTTPS   ┌───────────┐  HTTPS 443  ┌──────────────────────────────────────────────┐
+ │ bb 插件：领任务、采集、    │ ────────▶ │ 橙色云朵   │ ──────────▶ │ Nginx（Cloudflare 源服务器证书）               │
  │ 回传结果与 PDF/照片       │               │   └─▶ 127.0.0.1:3000  web 容器（Next.js）     │
  └──────────────────────────┘               │          ├─ 卷 media   /data/media  照片、报告 │
  浏览器后台（同一地址）                        │          ├─ 卷 exports /data/exports 导出文件  │
@@ -17,6 +17,7 @@
 ```
 
 - **采集仍在你自己的 Chrome 里进行**（站点登录态在你的浏览器），服务器只负责下发任务、入库、解析报告、翻译和导出。所以服务器不需要能访问 cryobank / fairfax，但需要能访问翻译模型接口（通义千问 / Claude）。
+- 浏览器 / 插件 → Cloudflare 用 Cloudflare 的通用边缘证书；Cloudflare → 服务器用安装在 Nginx 上的 **Cloudflare 源服务器证书**，SSL/TLS 模式设为 **完全（严格）/ Full (strict)**。
 - 只对外开放 22（SSH）、80、443。Postgres 和 web 容器只绑定 127.0.0.1（Docker 映射的端口会绕过 UFW，所以靠绑定地址而不是防火墙来隔离）。
 - 数据都在 Docker 卷里：`pgdata`（数据库）、`media`（照片与报告，当前约 2.7 GB，随采集增长）、`exports`。备份脚本把三者打包到一个目录。
 
@@ -28,13 +29,15 @@
 | CPU / 内存 | 2 vCPU / 4 GB 起（镜像在服务器上构建，Next.js 构建峰值约 2–3 GB；2 GB 内存的机器要加 swap，见 3.4） |
 | 磁盘 | 40 GB 起；媒体约每 100 位捐献者 0.5 GB，按采集规模预留 |
 | 地域 | 跟翻译模型同一侧：用 `token-plan.cn-beijing.maas.aliyuncs.com` 等国内端点就选中国大陆机房；用 dashscope-intl 或 Claude 就选海外机房。大陆机房构建镜像需要配置 npm / Docker 镜像源（见 9.3） |
-| 域名 | 一个指向服务器公网 IP 的 A 记录，如 `portal.example.com`（HTTPS 必需；大陆机房还需备案） |
+| 域名 | 托管在 Cloudflare 的域名，一个指向服务器公网 IP 的 A 记录，如 `portal.example.com`（大陆机房还需备案） |
 
 ## 2. 准备工作（在你自己的电脑上）
 
-1. DNS：添加 A 记录 `portal.example.com → 服务器公网 IP`，用 `dig +short portal.example.com` 确认生效。
-2. SSH：确认能用密钥登录服务器（`ssh root@服务器IP` 或云厂商默认用户）。
-3. 代码访问：仓库是私有的话，在服务器上生成部署密钥（见 4.1），加到 GitHub 仓库的 Deploy keys（只读）。
+1. Cloudflare DNS：添加 A 记录 `portal.example.com → 服务器公网 IP`，**代理状态为“已代理”（橙色云朵）**。`dig +short portal.example.com` 返回的是 Cloudflare 的 IP，这是正常的。
+2. Cloudflare → SSL/TLS → 概述：加密模式选 **完全（严格）**。“边缘证书”里打开“始终使用 HTTPS”。
+3. Cloudflare → SSL/TLS → 源服务器：如果还没有覆盖该域名的源服务器证书，点“创建证书”（RSA 或 ECC，主机名填 `portal.example.com` 或 `*.example.com`），把证书（PEM）和私钥分别保存下来，私钥只显示一次。已有的通配符源证书可直接复用。
+4. SSH：确认能用密钥登录服务器（`ssh root@服务器IP` 或云厂商默认用户）。
+5. 代码访问：仓库是私有的话，在服务器上生成部署密钥（见 4.1），加到 GitHub 仓库的 Deploy keys（只读）。
 
 ## 3. 系统初始化（服务器，root 或 sudo）
 
@@ -77,6 +80,15 @@ sudo ufw status verbose
 ```
 
 云厂商的安全组同样只放行 22 / 80 / 443。
+
+可选加固：所有访问都经过 Cloudflare，可以只允许 Cloudflare 的 IP 访问 80/443，别人就无法绕过 Cloudflare 直连源站（服务器上若还有不走 Cloudflare 的站点，不要这样做）：
+
+```bash
+sudo ufw delete allow 80,443/tcp
+for ip in $(curl -s https://www.cloudflare.com/ips-v4) $(curl -s https://www.cloudflare.com/ips-v6); do
+  sudo ufw allow proto tcp from "$ip" to any port 80,443
+done
+```
 
 ### 3.4 swap（内存 ≤ 4 GB 时）
 
@@ -137,8 +149,8 @@ nano .env
 | `COMPOSE_FILE` | `docker-compose.yml:deploy/docker-compose.prod.yml` | **新增这一行**。之后 `docker compose`、备份 / 恢复脚本都自动带上生产覆盖文件（日志轮转） |
 | `POSTGRES_PASSWORD` | 随机串 | 只在**首次**创建数据库时生效；之后改它需同时在库里改密码 |
 | `POSTGRES_BIND` | `127.0.0.1` | 数据库只对本机开放 |
-| `WEB_BIND` | `127.0.0.1` | web 只给 Caddy 访问 |
-| `WEB_PORT` | `3000` | 与 Caddyfile 中的端口一致 |
+| `WEB_BIND` | `127.0.0.1` | web 只给 Nginx 访问 |
+| `WEB_PORT` | `3000` | 与 Nginx 配置里 `proxy_pass` 的端口一致；3000 被别的服务占用时两边一起改 |
 | `AUTH_SECRET` | `openssl rand -hex 32` | 会话签名密钥；更换会让所有人重新登录 |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 你的邮箱 / 强密码 | 只在库里没有管理员时创建；登录后可在设置页改密码 |
 | `APP_URL` | `https://portal.example.com` | 必须是浏览器和插件实际访问的地址；https 时登录 Cookie 自动加 Secure |
@@ -158,20 +170,50 @@ curl -s http://127.0.0.1:3000/api/health   # {"ok":true}
 ss -tlnp | grep -E ':3000|:5432'      # 两个端口都只应出现 127.0.0.1
 ```
 
-## 6. HTTPS 反向代理（Caddy）
+## 6. HTTPS 反向代理（Nginx + Cloudflare 源服务器证书）
+
+服务器上已经装有 Nginx，这里只新增一个站点，不影响已有站点。
+
+**放置证书**（已经放好的话，跳过并记下路径）：
 
 ```bash
-sudo apt -y install debian-keyring debian-archive-keyring apt-transport-https
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt -y install caddy
-sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy
-sudo cp deploy/Caddyfile.example /etc/caddy/Caddyfile
-sudo sed -i 's/portal.example.com/你的域名/' /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+sudo mkdir -p /etc/ssl/cloudflare && sudo chmod 700 /etc/ssl/cloudflare
+sudo nano /etc/ssl/cloudflare/portal.example.com.pem   # 粘贴“源证书”
+sudo nano /etc/ssl/cloudflare/portal.example.com.key   # 粘贴“私钥”
+sudo chmod 600 /etc/ssl/cloudflare/*.key
 ```
 
-浏览器打开 `https://你的域名`，用 `.env` 里的管理员账号登录。证书由 Caddy 自动申请和续期（需要 80/443 对公网开放、DNS 已生效）。上传上限 60 MB、代理超时 180 秒已在 Caddyfile 中设置（插件回传的报告最大 50 MB，单人资料导出最多等 60 秒翻译）。
+**启用站点**：
+
+```bash
+cd /opt/bb-data-portal
+sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/bb-data-portal
+sudo sed -i 's/portal.example.com/你的域名/g' /etc/nginx/sites-available/bb-data-portal
+sudo nano /etc/nginx/sites-available/bb-data-portal   # 核对 ssl_certificate / ssl_certificate_key 路径
+sudo ln -s /etc/nginx/sites-available/bb-data-portal /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+注意：
+
+- `nginx -t` 若报 `"set_real_ip_from" directive is duplicate` 或 `real_ip_header` 重复，说明已有配置在 `http {}` 里设过 Cloudflare 真实 IP，删掉本文件开头那一段即可。
+- 配置里用的是 `http2 on;`（Ubuntu 24.04 自带 Nginx 1.24 支持）；更老的 Nginx 把它删掉，改成 `listen 443 ssl http2;`。
+- 上传上限 60 MB（`client_max_body_size`）、代理超时 180 秒已在配置中设置（插件回传的报告最大 50 MB，单人资料导出最多等 60 秒翻译）。Cloudflare 本身的限制：免费 / Pro 套餐单次请求体最大 100 MB、等待源站响应最长 100 秒，都在范围内。
+
+**Cloudflare 侧设置**（插件请求不是浏览器页面，过不了人机验证）：
+
+- 安全 → 机器人：**不要**对该域名开启 “Bot Fight Mode / 自动程序攻击模式”，也不要开“我正在受到攻击”模式；否则插件请求 `/api/ext/*` 会被质询拦截，表现为插件一直离线或配对失败。
+- 如果开了 WAF 规则，加一条“跳过”规则：`URI 路径 开头为 /api/ext/` → 跳过所有托管规则 / 超级机器人攻击模式。
+- 缓存保持默认即可（后台页面与 `/api/*` 不会被缓存）；不要加“缓存所有内容”的页面规则。
+
+验证：
+
+```bash
+curl -sI https://你的域名/api/health | head -3        # HTTP/2 200，响应头里有 server: cloudflare
+curl -s https://你的域名/api/health                   # {"ok":true}
+```
+
+浏览器打开 `https://你的域名`，用 `.env` 里的管理员账号登录。若浏览器显示 Cloudflare 526 错误，是源站证书无效（路径错、证书与私钥不匹配，或证书不覆盖该域名）；521/522 是 Nginx 没在 443 监听或防火墙挡住了 Cloudflare。
 
 ## 7. 从本机迁移现有数据（可选）
 
@@ -251,7 +293,8 @@ docker image prune -f
 
 ## 10. 上线验收清单
 
-- [ ] `https://你的域名` 证书有效，`/api/health` 返回 `{"ok":true}`
+- [ ] `https://你的域名` 证书有效（Cloudflare 模式为“完全（严格）”），`/api/health` 返回 `{"ok":true}`
+- [ ] 插件能配对、心跳正常（没有被 Cloudflare 机器人防护拦截）
 - [ ] `ss -tlnp` 中 3000、5432 只绑定 127.0.0.1；外网 `nc -vz 服务器IP 5432` 不通
 - [ ] 管理员能登录，设置页已修改默认密码
 - [ ] 插件设备在线，跑通一条测试任务（README 第 3 节“本地测试页”平台）
@@ -264,5 +307,6 @@ docker image prune -f
 
 - `.env` 权限 600，不进 git；`AUTH_SECRET`、数据库密码、模型 API key 只存在于服务器 `.env` 与加密的异地备份中。
 - 备份含全部捐献者数据（含病史与基因检测），异地存储请选择加密的目的地（如 rclone crypt）。
-- 只开放 22/80/443；SSH 仅密钥登录；系统安全更新自动安装。
+- 只开放 22/80/443（可进一步限制 80/443 只允许 Cloudflare IP）；SSH 仅密钥登录；系统安全更新自动安装。
+- 源服务器证书私钥（`/etc/ssl/cloudflare/*.key`）权限 600，不要放进仓库或备份到明文位置。
 - 后台只有管理员账号可登录；不要把后台地址公开。插件与服务器之间的通信走 HTTPS，设备凭据可在设备页随时吊销。
