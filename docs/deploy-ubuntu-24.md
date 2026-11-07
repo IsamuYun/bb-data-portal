@@ -116,7 +116,10 @@ Host github.com
 EOF
 git clone git@github.com:IsamuYun/bb-data-portal.git /opt/bb-data-portal
 cd /opt/bb-data-portal
+ls docker-compose.yml deploy/docker-compose.prod.yml   # 两个都必须存在，否则 compose 会报 "no such file"
 ```
+
+> 仓库名是 `bb-data-portal`。同一账号下的 `data-portal` 是另一个项目（ADI 地图脚本），克隆错了就会出现 `stat /opt/bb-data-portal/docker-compose.yml: no such file or directory`。
 
 ### 4.2 .env
 
