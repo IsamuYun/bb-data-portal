@@ -11,6 +11,8 @@ import { cellText } from "../cell";
 import { DOC_FIELDS } from "@/lib/media/store";
 import { MediaManager, type MediaField, type MediaGroup } from "./media-manager";
 import { ReparseMedicalButton } from "./reparse-button";
+import { LooksEditor } from "./looks-editor";
+import { CARRIER_LABEL } from "@/lib/records/facets";
 import { needsManualCarriers } from "@/lib/profile/model";
 
 /** Display names for report fields of other platforms (not upload targets): Fairfax Genetic Testing. */
@@ -51,9 +53,10 @@ export default async function RecordDetailPage({ params }: { params: Promise<{ i
   return (
     <PageShell
       title={`#${r.record.seq} · ${r.platform.name} ${r.record.externalId}`}
-      description={`来源：${r.platform.name}（来源 ID ${r.record.externalId}）· v${r.record.version} · 采集于 ${fmtDate(r.record.capturedAt)}`}
+      description={`来源：${r.platform.name}（来源 ID ${r.record.externalId}）· v${r.record.version} · 采集于 ${fmtDate(r.record.capturedAt)} · 基因筛查：${CARRIER_LABEL[r.record.carrierStatus]}`}
       actions={
         <>
+          <LooksEditor id={r.record.id} value={r.record.looks} />
           <Button variant={needsManualCarriers(r.record.data, r.record.manual) ? "destructive" : "outline"} render={<Link href={`/records/${r.record.id}/edit`} />}>
             {needsManualCarriers(r.record.data, r.record.manual) ? "编辑（基因筛查待人工整理）" : r.record.manual.carriers ? "编辑（已人工整理）" : "编辑"}
           </Button>

@@ -1,4 +1,4 @@
-import { inArray, records, sql, type SQL } from "@bb/db";
+import { eq, gte, inArray, isNull, records, sql, type CarrierStatus, type SQL } from "@bb/db";
 
 /**
  * Cross-source donor facets for the records list. Cryobank and FairFax store the same keys but in different
@@ -87,7 +87,21 @@ export const EYE: (FacetOption & { re: string })[] = [
   { value: "amber", label: "琥珀色", re: "amber" },
 ];
 
-export type FacetFilters = { heightMin: number | null; heightMax: number | null; education: string; complexion: string; race: string; eye: string };
+export const CARRIER: (FacetOption & { value: CarrierStatus })[] = [
+  { value: "none", label: "不携带致病基因（已检测）" },
+  { value: "carrier", label: "携带者" },
+  { value: "pending", label: "有报告，待人工整理" },
+  { value: "untested", label: "无基因检测" },
+];
+export const CARRIER_LABEL: Record<CarrierStatus, string> = { none: "未检出", carrier: "携带者", pending: "待整理", untested: "无检测" };
+
+/** 颜值 filter: a minimum score, or "unrated". */
+export const LOOKS: FacetOption[] = [
+  ...[9, 8, 7, 6, 5].map((n) => ({ value: String(n), label: `${n} 分及以上` })),
+  { value: "unrated", label: "未评分" },
+];
+
+export type FacetFilters = { heightMin: number | null; heightMax: number | null; education: string; complexion: string; race: string; eye: string; carrier: string; looks: string };
 
 const pick = (v: string, opts: FacetOption[]) => (opts.some((o) => o.value === v) ? v : "");
 const cm = (v: string) => {
@@ -103,6 +117,8 @@ export function parseFacets(get: (k: string) => string): FacetFilters {
     complexion: pick(get("skin"), COMPLEXION),
     race: pick(get("race"), RACE),
     eye: pick(get("eye"), EYE),
+    carrier: pick(get("gene"), CARRIER),
+    looks: pick(get("looks"), LOOKS),
   };
 }
 
@@ -115,6 +131,8 @@ export function facetParams(f: FacetFilters): Record<string, string> {
     skin: f.complexion,
     race: f.race,
     eye: f.eye,
+    gene: f.carrier,
+    looks: f.looks,
   };
 }
 
@@ -137,5 +155,8 @@ export function facetWhere(f: FacetFilters, platforms: { id: string; slug: strin
   if (race) w.push(sql`${raceText(platforms)} ~* ${race.re}`);
   const eye = EYE.find((o) => o.value === f.eye);
   if (eye) w.push(sql`${data("eyeColor")} ~* ${eye.re}`);
+  if (f.carrier) w.push(eq(records.carrierStatus, f.carrier as CarrierStatus));
+  if (f.looks === "unrated") w.push(isNull(records.looks));
+  else if (f.looks) w.push(gte(records.looks, Number(f.looks)));
   return w;
 }

@@ -1,11 +1,13 @@
 import { relations, sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
   pgEnum,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -162,6 +164,21 @@ export type ManualCarrier = { gene: string; disease: string; diseaseEn?: string;
 export type ManualCarriers = { kind: "none" | "carrier"; panel: string; items: ManualCarrier[]; updatedAt: string };
 export type RecordManual = { carriers?: ManualCarriers };
 
+/**
+ * Carrier screening outcome per record, same rule as the profile export (lib/profile/model.ts): the hand-curated
+ * result wins, then the parsed `gtsCarriers` list; a report whose result was not extracted is `pending`.
+ */
+export const CARRIER_STATUSES = ["none", "carrier", "pending", "untested"] as const;
+export type CarrierStatus = (typeof CARRIER_STATUSES)[number];
+const carrierStatusSql = sql`case
+  when manual ? 'carriers' then
+    case when manual->'carriers'->>'kind' = 'none' or coalesce(jsonb_array_length(case when jsonb_typeof(manual->'carriers'->'items') = 'array' then manual->'carriers'->'items' end), 0) = 0 then 'none' else 'carrier' end
+  when jsonb_typeof(data->'gtsCarriers') = 'array' then
+    case when jsonb_array_length(data->'gtsCarriers') = 0 then 'none' else 'carrier' end
+  when coalesce(data->>'gtsPanel', '') <> '' or (jsonb_typeof(data->'geneticTests') = 'array' and jsonb_array_length(data->'geneticTests') > 0) then 'pending'
+  else 'untested'
+end`;
+
 export const records = pgTable(
   "records",
   {
@@ -178,12 +195,21 @@ export const records = pgTable(
      * parsers rewrite; the profile export prefers these over the parsed values.
      */
     manual: jsonb("manual").$type<RecordManual>().notNull().default({}),
+    /** Derived by Postgres from `data` + `manual`, so it stays right whatever writes them. "none" = screened, no carrier found. */
+    carrierStatus: text("carrier_status").$type<CarrierStatus>().generatedAlwaysAs(carrierStatusSql).notNull(),
+    /** Hand-given looks score (颜值), 1–10; null = not rated. */
+    looks: smallint("looks"),
     sourceUrl: text("source_url").notNull(),
     jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex("records_platform_external_uq").on(t.platformId, t.externalId), uniqueIndex("records_seq_uq").on(t.seq)],
+  (t) => [
+    uniqueIndex("records_platform_external_uq").on(t.platformId, t.externalId),
+    uniqueIndex("records_seq_uq").on(t.seq),
+    index("records_carrier_status_idx").on(t.carrierStatus),
+    check("records_looks_range", sql`${t.looks} between 1 and 10`),
+  ],
 );
 
 export const media = pgTable(

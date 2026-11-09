@@ -94,3 +94,14 @@ export async function saveManualCarriersAction(id: string, input: ManualCarriers
   revalidatePath("/records");
   return { ok: true };
 }
+
+/** Set (1–10) or clear (empty) the hand-given looks score of a record. */
+export async function setLooksAction(id: string, value: number | null): Promise<{ ok: true }> {
+  await requireUser();
+  const looks = z.number().int().min(1).max(10).nullable().parse(value);
+  const [row] = await db().update(records).set({ looks }).where(eq(records.id, id)).returning({ id: records.id });
+  if (!row) throw new Error("记录不存在");
+  revalidatePath(`/records/${id}`);
+  revalidatePath("/records");
+  return { ok: true };
+}

@@ -43,6 +43,13 @@
       "when": 1794065827906,
       "tag": "0005_records_manual",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794255817054,
+      "tag": "0006_records_carrier_looks",
+      "breakpoints": true
     }
   ]
 }
