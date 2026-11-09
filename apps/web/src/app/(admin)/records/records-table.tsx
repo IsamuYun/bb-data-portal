@@ -16,6 +16,8 @@ export type RecordRow = {
   /** Donor ID inside the data source. */
   externalId: string;
   version: number;
+  /** Data source name, set only when listing every source. */
+  source?: string;
   thumbId: string | null;
   cells: string[];
   mediaCount: number;
@@ -23,7 +25,7 @@ export type RecordRow = {
 };
 
 /** Record list with a photo thumbnail per row, row selection and bulk delete. */
-export function RecordsTable({ rows, columns }: { rows: RecordRow[]; columns: string[] }) {
+export function RecordsTable({ rows, columns, showSource = false }: { rows: RecordRow[]; columns: string[]; showSource?: boolean }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState(false);
   const [pending, start] = useTransition();
@@ -70,6 +72,7 @@ export function RecordsTable({ rows, columns }: { rows: RecordRow[]; columns: st
                 </TableHead>
                 <TableHead className="w-14">图片</TableHead>
                 <TableHead>编号</TableHead>
+                {showSource ? <TableHead>来源</TableHead> : null}
                 <TableHead>来源 ID</TableHead>
                 {columns.map((c) => (
                   <TableHead key={c}>{c}</TableHead>
@@ -81,7 +84,7 @@ export function RecordsTable({ rows, columns }: { rows: RecordRow[]; columns: st
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={columns.length + 6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={columns.length + 6 + (showSource ? 1 : 0)} className="text-center text-muted-foreground">
                     还没有记录。插件执行任务后结果会出现在这里。
                   </TableCell>
                 </TableRow>
@@ -104,6 +107,7 @@ export function RecordsTable({ rows, columns }: { rows: RecordRow[]; columns: st
                         #{r.seq}
                       </Link>
                     </TableCell>
+                    {showSource ? <TableCell className="text-xs whitespace-nowrap">{r.source}</TableCell> : null}
                     <TableCell>
                       <span className="font-mono text-xs">{r.externalId}</span>
                       {r.version > 1 ? <span className="ml-1 text-xs text-muted-foreground">v{r.version}</span> : null}

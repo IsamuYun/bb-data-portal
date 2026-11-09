@@ -6,25 +6,39 @@ import { Pagination, parsePage } from "@/components/common/pagination";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cellText, first, fmtDate } from "@/lib/format";
+import { COMPLEXION, EDUCATION, EYE, RACE, facetParams, facetWhere, hasFacets, parseFacets, raceText } from "@/lib/records/facets";
 import { RecordsTable } from "./records-table";
 
 export const dynamic = "force-dynamic";
 const MAX_COLS = 6;
 const PAGE_SIZE = 20;
+const ALL = "all";
+/** Columns shown when listing every source at once: the shared facet fields (race read per source). */
+const ALL_COLUMNS = [
+  { key: "height", label: "身高" },
+  { key: "educationLevel", label: "学历" },
+  { key: "complexion", label: "肤色" },
+  { key: "race", label: "人种" },
+  { key: "eyeColor", label: "眼睛颜色" },
+];
 
 export default async function RecordsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
   const d = db();
-  const ps = await d.select({ id: platforms.id, name: platforms.name, fieldSchema: platforms.fieldSchema }).from(platforms).orderBy(platforms.name);
-  const platformId = first(sp.platformId) || ps[0]?.id || "";
+  const ps = await d.select({ id: platforms.id, slug: platforms.slug, name: platforms.name, fieldSchema: platforms.fieldSchema }).from(platforms).orderBy(platforms.name);
+  const platformId = ps.some((p) => p.id === first(sp.platformId)) ? first(sp.platformId) : ALL;
+  const all = platformId === ALL;
+  const facets = parseFacets((k) => first(sp[k]).trim());
   const q = first(sp.q).trim();
   const review = first(sp.review) === "carriers" ? "carriers" : "";
   const page = parsePage(sp.page);
   const platform = ps.find((p) => p.id === platformId);
-  const columns = (platform?.fieldSchema ?? []).filter((f) => f.type !== "url" && f.type !== "text" && f.type !== "json").slice(0, MAX_COLS);
+  const columns = all ? ALL_COLUMNS : (platform?.fieldSchema ?? []).filter((f) => f.type !== "url" && f.type !== "text" && f.type !== "json").slice(0, MAX_COLS);
+  const platformName = new Map(ps.map((p) => [p.id, p.name]));
 
   const where: SQL[] = [];
-  if (platformId) where.push(eq(records.platformId, platformId));
+  if (!all) where.push(eq(records.platformId, platformId));
+  where.push(...facetWhere(facets, ps));
   if (q) {
     const bySeq = /^#?\d+$/.test(q) ? [eq(records.seq, Number(q.replace("#", "")))] : [];
     where.push(or(...bySeq, ilike(records.externalId, `%${q}%`), sql`${records.data}::text ilike ${"%" + q + "%"}`)!);
@@ -43,7 +57,9 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
         seq: records.seq,
         externalId: records.externalId,
         version: records.version,
+        platformId: records.platformId,
         data: records.data,
+        race: sql<string | null>`${raceText(ps)}`,
         capturedAt: records.capturedAt,
         // Drizzle drops table qualifiers inside sql`` for single-table selects, so qualify by hand.
         mediaCount: sql<number>`(select count(*) from ${media} where ${media}.record_id = ${records}.id)`,
@@ -63,7 +79,8 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
     externalId: r.externalId,
     version: r.version,
     thumbId: r.thumbId,
-    cells: columns.map((c) => cellText(r.data[c.key])),
+    source: all ? (platformName.get(r.platformId) ?? "") : undefined,
+    cells: columns.map((c) => (c.key === "race" ? cellText(parseRace(r.race)) : cellText(r.data[c.key]))),
     mediaCount: Number(r.mediaCount),
     capturedAt: fmtDate(r.capturedAt),
   }));
@@ -72,6 +89,7 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
     <PageShell title="记录" description="插件采集入库的结果；列来自平台的字段模板">
       <form method="get" className="flex flex-wrap items-end gap-2">
         <NativeSelect name="platformId" defaultValue={platformId} aria-label="数据来源">
+          <option value={ALL}>全部来源</option>
           {ps.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -83,17 +101,49 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
           <option value="carriers">基因筛查待人工整理</option>
         </NativeSelect>
         <Input name="q" defaultValue={q} placeholder="搜索编号、来源 ID 或任意字段" className="w-64" />
+        <div className="flex items-center gap-1">
+          <Input name="hmin" type="number" min={100} max={250} defaultValue={facets.heightMin ?? ""} placeholder="身高≥cm" aria-label="最低身高（cm）" className="w-24" />
+          <span className="text-muted-foreground">–</span>
+          <Input name="hmax" type="number" min={100} max={250} defaultValue={facets.heightMax ?? ""} placeholder="身高≤cm" aria-label="最高身高（cm）" className="w-24" />
+        </div>
+        <FacetSelect name="edu" label="学历" value={facets.education} options={EDUCATION} />
+        <FacetSelect name="skin" label="肤色" value={facets.complexion} options={COMPLEXION} />
+        <FacetSelect name="race" label="人种" value={facets.race} options={RACE} />
+        <FacetSelect name="eye" label="眼睛颜色" value={facets.eye} options={EYE} />
         <Button type="submit" variant="secondary">
           筛选
         </Button>
-        {q || review ? (
-          <Button variant="ghost" render={<Link href={`/records?platformId=${platformId}`} />}>
+        {q || review || hasFacets(facets) ? (
+          <Button variant="ghost" render={<Link href={all ? "/records" : `/records?platformId=${platformId}`} />}>
             清除
           </Button>
         ) : null}
       </form>
-      <RecordsTable rows={tableRows} columns={columns.map((c) => c.label)} />
-      <Pagination page={page} total={total} params={{ platformId, q, review }} pageSize={PAGE_SIZE} />
+      <RecordsTable rows={tableRows} columns={columns.map((c) => c.label)} showSource={all} />
+      <Pagination page={page} total={total} params={{ platformId: all ? "" : platformId, q, review, ...facetParams(facets) }} pageSize={PAGE_SIZE} />
     </PageShell>
+  );
+}
+
+/** Race text is either a plain string (Cryobank `ethnicOrigin`) or a JSON list (FairFax `ancestry`). */
+function parseRace(v: string | null): unknown {
+  if (!v?.startsWith("[")) return v;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return v;
+  }
+}
+
+function FacetSelect({ name, label, value, options }: { name: string; label: string; value: string; options: { value: string; label: string }[] }) {
+  return (
+    <NativeSelect name={name} defaultValue={value} aria-label={label}>
+      <option value="">{label}：不限</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </NativeSelect>
   );
 }
