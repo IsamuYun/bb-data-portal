@@ -4,7 +4,7 @@
 # Off-site: set OFFSITE to an rsync destination (user@host:/path) or an rclone remote (remote:bucket/path).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/bb-data-portal}"
+BACKUP_ROOT="${BACKUP_ROOT:-/opt/backups/bb-data-portal}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
 OFFSITE="${OFFSITE:-}"
 echo "== $(date -Is) backup start"
