@@ -120,6 +120,11 @@ export const cryobankFieldSchema: FieldSchema = [
     "translate": "none"
   },
   {
+    "key": "purchaseVials",
+    "label": "购买试管",
+    "type": "json"
+  },
+  {
     "key": "jurisdictionNotes",
     "label": "地区限制",
     "type": "string[]"
@@ -408,6 +413,33 @@ export const cryobankFieldSchema: FieldSchema = [
   }
 ];
 
+/** A removed donor (2026-11-17): /donor/<id> answers 404 with the title "Page Not Found". */
+export const CRYOBANK_GONE = "Page Not Found";
+
+/**
+ * "Purchase vials" panel (2026-11-17): one `.vial-info` block per vial type, e.g. "IUI Price $897 per vial Available 5
+ * Quantity Add to cart" or "ICI Price $1,897 per vial Available <5 Call to purchase …". A donor with no stock has no
+ * panel at all; a donor whose carrier acknowledgement is unsigned shows a "Required forms" block instead, so stock is
+ * unknown there. Parsed into `purchaseVials` / `vialStock` on the server (apps/web/src/lib/cryobank/vials.ts).
+ */
+export const VIAL_STEP: Recipe["steps"][number] = {
+  op: "extract",
+  fields: {
+    purchaseVialsRaw: { selector: ".vial-info", attr: "innerText", all: true, trim: true },
+    purchaseFormRequired: { selector: "main h2:contains('Required forms')", trim: true },
+  },
+};
+
+/** Whether a recipe already extracts the Purchase vials panel. */
+export const hasVialStep = (r: Recipe) => r.steps.some((s) => s.op === "extract" && "purchaseVialsRaw" in s.fields);
+
+/** Add the Purchase vials extraction right before `emit` and the removed-donor pattern. */
+export function withVialStep(r: Recipe, version: number): Recipe {
+  const at = r.steps.findIndex((s) => s.op === "emit");
+  const steps = at < 0 ? [...r.steps, VIAL_STEP] : [...r.steps.slice(0, at), VIAL_STEP, ...r.steps.slice(at)];
+  return { ...r, version, gonePattern: r.gonePattern ?? CRYOBANK_GONE, steps };
+}
+
 /**
  * Confirmed against the live page in M3 (2026-10-31): the profile is Nuxt SSR; each attribute is
  * `div.item > p` (label) followed by `div.value`, which the interpreter's `label` mode resolves.
@@ -418,6 +450,7 @@ export const cryobankRecipeV1: Recipe = {
   "platform": "cryobank",
   "version": 1,
   "match": "^https://www\\.cryobank\\.com/donor/(\\d+)",
+  "gonePattern": CRYOBANK_GONE,
   "settings": {
     "delayMs": [
       3000,
@@ -586,6 +619,7 @@ export const cryobankRecipeV1: Recipe = {
       "from": "adulthoodPhotos",
       "as": "photo"
     },
+    VIAL_STEP,
     {
       "op": "emit"
     }

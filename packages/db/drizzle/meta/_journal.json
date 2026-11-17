@@ -50,6 +50,13 @@
       "when": 1794255817054,
       "tag": "0006_records_carrier_looks",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794935519005,
+      "tag": "0007_records_availability",
+      "breakpoints": true
     }
   ]
 }

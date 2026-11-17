@@ -1,9 +1,10 @@
 "use server";
 
-import { and, datasets, db, devices, eq, ilike, inArray, jobRuns, jobs, notInArray, or, platforms, recipes, type SQL } from "@bb/db";
+import { and, datasets, db, desc, devices, eq, ilike, inArray, isNotNull, jobRuns, jobs, notInArray, or, platforms, recipes, records, type SQL } from "@bb/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { externalIdFromUrl } from "../import/parse";
+import { MAX_IDS, detailUrlFor, parseIdInput, type IdEntry } from "../jobs/by-id";
 import { requireUser } from "../require-user";
 
 export type JobFilter = { platformId?: string; datasetId?: string; status?: string; q?: string };
@@ -190,4 +191,109 @@ export async function createListingJobAction(_prev: ListingState, formData: Form
   revalidatePath("/datasets");
   revalidatePath("/jobs");
   redirect(`/jobs/${jobId}`);
+}
+
+export type CollectByIdState = { error?: string; message?: string; problems?: string[] } | undefined;
+
+/** Priority of jobs queued by hand: ahead of imports and listing results. */
+const MANUAL_PRIORITY = 900;
+
+/**
+ * "按 ID 采集": for each donor ID (or pasted profile URL) of one platform, re-queue its latest job, or create a job
+ * when there is none. Either way it goes to the front of the queue with a fresh attempt budget; a finished capture
+ * overwrites the record (and clears a delisted mark), a 404 marks it delisted. Jobs a device is running are left alone.
+ */
+export async function collectByIdsAction(_prev: CollectByIdState, formData: FormData): Promise<CollectByIdState> {
+  await requireUser();
+  const platformId = String(formData.get("platformId") ?? "");
+  const entries = parseIdInput(String(formData.get("ids") ?? ""));
+  if (!platformId) return { error: "请选择数据源" };
+  if (entries.length === 0) return { error: "请输入 Donor ID" };
+  if (entries.length > MAX_IDS) return { error: `一次最多 ${MAX_IDS} 个 ID（当前 ${entries.length} 个）` };
+  const r = await queueCollect(platformId, entries);
+  if ("error" in r) return r;
+  revalidatePath("/jobs");
+  revalidatePath("/");
+  const parts = [r.created ? `新建 ${r.created} 个` : "", r.requeued ? `重采 ${r.requeued} 个` : "", r.busy ? `${r.busy} 个正在执行，未改动` : ""].filter(Boolean);
+  return { message: parts.length ? `已排到队首：${parts.join("，")}` : "没有可排队的任务", problems: r.problems };
+}
+
+/** Re-collect one record ("更新数据" on the record page): same rules as 按 ID 采集. */
+export async function recollectRecordAction(id: string): Promise<{ message: string }> {
+  await requireUser();
+  const [rec] = await db().select({ platformId: records.platformId, externalId: records.externalId, sourceUrl: records.sourceUrl }).from(records).where(eq(records.id, id)).limit(1);
+  if (!rec) throw new Error("记录不存在");
+  const r = await queueCollect(rec.platformId, [{ externalId: rec.externalId, url: rec.sourceUrl }]);
+  if ("error" in r) throw new Error(r.error);
+  if (r.problems.length) throw new Error(r.problems[0]);
+  revalidatePath(`/records/${id}`);
+  revalidatePath("/jobs");
+  return { message: r.busy ? "该记录正在采集中，完成后页面会自动刷新" : "已排到队首，插件采集完成后页面会自动刷新" };
+}
+
+type QueueResult = { error: string } | { created: number; requeued: number; busy: number; problems: string[] };
+
+async function queueCollect(platformId: string, entries: IdEntry[]): Promise<QueueResult> {
+  const d = db();
+  const [act] = await d.select({ json: recipes.json }).from(recipes).where(and(eq(recipes.platformId, platformId), eq(recipes.isActive, true))).limit(1);
+  if (!act) return { error: "该数据源没有激活的 Recipe" };
+  const match = new RegExp(act.json.match);
+  const ids = entries.map((e) => e.externalId);
+
+  const existingJobs = await d
+    .select({ id: jobs.id, externalId: jobs.externalId, status: jobs.status })
+    .from(jobs)
+    .where(and(eq(jobs.platformId, platformId), inArray(jobs.externalId, ids), eq(jobs.dryRun, false)))
+    .orderBy(desc(jobs.createdAt));
+  const latestJob = new Map<string, (typeof existingJobs)[number]>();
+  for (const j of existingJobs) if (j.externalId && !latestJob.has(j.externalId)) latestJob.set(j.externalId, j);
+  const recs = await d
+    .select({ externalId: records.externalId, sourceUrl: records.sourceUrl })
+    .from(records)
+    .where(and(eq(records.platformId, platformId), inArray(records.externalId, ids)));
+  const recUrl = new Map(recs.map((r) => [r.externalId, r.sourceUrl]));
+  // A known profile URL of this platform, to build the URL of an ID that was never collected.
+  const [sample] = await d
+    .select({ url: records.sourceUrl, externalId: records.externalId })
+    .from(records)
+    .where(eq(records.platformId, platformId))
+    .orderBy(desc(records.capturedAt))
+    .limit(1);
+  const [jobSample] = sample
+    ? [undefined]
+    : await d
+        .select({ url: jobs.url, externalId: jobs.externalId })
+        .from(jobs)
+        .where(and(eq(jobs.platformId, platformId), isNotNull(jobs.externalId)))
+        .orderBy(desc(jobs.createdAt))
+        .limit(1);
+  const tpl = sample ?? (jobSample?.externalId ? { url: jobSample.url, externalId: jobSample.externalId } : undefined);
+
+  const requeue: string[] = [];
+  const create: { externalId: string; url: string }[] = [];
+  const problems: string[] = [];
+  let busy = 0;
+  for (const e of entries) {
+    const job = latestJob.get(e.externalId);
+    if (job) {
+      if (job.status === "leased" || job.status === "running") busy++;
+      else requeue.push(job.id);
+      continue;
+    }
+    const url = e.url ?? recUrl.get(e.externalId) ?? (tpl ? detailUrlFor(e.externalId, tpl) : null);
+    if (!url) problems.push(`${e.externalId}：无法确定详情页地址，请粘贴完整 URL`);
+    else if (!match.test(url)) problems.push(`${e.externalId}：URL 不匹配该数据源的 Recipe（${url}）`);
+    else create.push({ externalId: e.externalId, url });
+  }
+
+  await d.transaction(async (tx) => {
+    if (requeue.length)
+      await tx
+        .update(jobs)
+        .set({ status: "pending", attempts: 0, priority: MANUAL_PRIORITY, lastError: null, leasedBy: null, leaseUntil: null })
+        .where(inArray(jobs.id, requeue));
+    if (create.length)
+      await tx.insert(jobs).values(create.map((c) => ({ platformId, url: c.url, externalId: c.externalId, priority: MANUAL_PRIORITY, seed: { manual: true } })));
+  });
+  return { created: create.length, requeued: requeue.length, busy, problems };
 }

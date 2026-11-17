@@ -6,7 +6,7 @@ import { Pagination, parsePage } from "@/components/common/pagination";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cellText, first, fmtDate } from "@/lib/format";
-import { CARRIER, CARRIER_LABEL, COMPLEXION, EDUCATION, EYE, LOOKS, RACE, facetParams, facetWhere, hasFacets, parseFacets, raceText } from "@/lib/records/facets";
+import { AVAIL, AVAIL_LABEL, CARRIER, CARRIER_LABEL, COMPLEXION, EDUCATION, EYE, LOOKS, RACE, facetParams, facetWhere, hasFacets, parseFacets, raceText } from "@/lib/records/facets";
 import { RecordsTable } from "./records-table";
 
 export const dynamic = "force-dynamic";
@@ -59,6 +59,7 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
         version: records.version,
         platformId: records.platformId,
         carrierStatus: records.carrierStatus,
+        availability: records.availability,
         looks: records.looks,
         data: records.data,
         race: sql<string | null>`${raceText(ps)}`,
@@ -85,6 +86,7 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
     cells: [
       ...columns.map((c) => (c.key === "race" ? cellText(parseRace(r.race)) : cellText(r.data[c.key]))),
       CARRIER_LABEL[r.carrierStatus],
+      AVAIL_LABEL[r.availability],
       r.looks?.toString() ?? "—",
     ],
     mediaCount: Number(r.mediaCount),
@@ -118,6 +120,7 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
         <FacetSelect name="eye" label="眼睛颜色" value={facets.eye} options={EYE} />
         <FacetSelect name="gene" label="基因筛查" value={facets.carrier} options={CARRIER} />
         <FacetSelect name="looks" label="颜值" value={facets.looks} options={LOOKS} />
+        <FacetSelect name="avail" label="可用状态" value={facets.avail} options={AVAIL} />
         <Button type="submit" variant="secondary">
           筛选
         </Button>
@@ -127,7 +130,7 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
           </Button>
         ) : null}
       </form>
-      <RecordsTable rows={tableRows} columns={[...columns.map((c) => c.label), "基因筛查", "颜值"]} showSource={all} />
+      <RecordsTable rows={tableRows} columns={[...columns.map((c) => c.label), "基因筛查", "可用状态", "颜值"]} showSource={all} />
       <Pagination page={page} total={total} params={{ platformId: all ? "" : platformId, q, review, ...facetParams(facets) }} pageSize={PAGE_SIZE} />
     </PageShell>
   );

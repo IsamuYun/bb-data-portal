@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "./index";
 import { dictionaryEntries, platforms, recipes, users, type FieldSchema } from "./schema";
 import { dictionaryZh } from "./seed-data/dictionary-zh";
-import { cryobankDocuments, cryobankFieldSchema, cryobankRecipeV1, documentFieldsOf, retiredDocumentFields, withDocumentSteps, withoutDocumentSteps } from "./seed-data/cryobank";
+import { cryobankDocuments, cryobankFieldSchema, cryobankRecipeV1, documentFieldsOf, hasVialStep, withVialStep, retiredDocumentFields, withDocumentSteps, withoutDocumentSteps } from "./seed-data/cryobank";
 import { FAIRFAX_GENETIC_FIELDS, FAIRFAX_MEDICAL_FIELDS, fairfaxDictionaryZh, fairfaxFieldSchema, fairfaxListing, fairfaxRecipeV1, hasFairfaxV2, withFairfaxV2 } from "./seed-data/fairfax";
 import { localtestFieldSchema, localtestRecipeV1 } from "./seed-data/localtest";
 
@@ -24,7 +24,8 @@ async function addFields(p: { id: string; fieldSchema: FieldSchema }, seedSchema
   const have = new Set(p.fieldSchema.map((f) => f.key));
   const add = seedSchema.filter((f) => keys.includes(f.key) && !have.has(f.key));
   if (add.length === 0) return false;
-  await db().update(platforms).set({ fieldSchema: [...p.fieldSchema, ...add] }).where(eq(platforms.id, p.id));
+  p.fieldSchema = [...p.fieldSchema, ...add];
+  await db().update(platforms).set({ fieldSchema: p.fieldSchema }).where(eq(platforms.id, p.id));
   return true;
 }
 
@@ -76,6 +77,7 @@ export async function seed(opts?: { adminEmail?: string; adminPassword?: string;
   const keys = cryobankFieldSchema.map((f) => f.key);
   const laterFields = keys.slice(keys.indexOf("gtsCarrierDiseases"), keys.indexOf("childhoodPhotos"));
   if (await addFields(cb, cryobankFieldSchema, laterFields)) log("seed: cryobank fields added (GTS / medical / questionnaire)");
+  if (await addFields(cb, cryobankFieldSchema, ["purchaseVials"])) log("seed: cryobank field added (purchaseVials)");
 
   const dictRows = [dictionaryZh, fairfaxDictionaryZh].flatMap((dict) => Object.entries(dict)).flatMap(([fieldKey, m]) => Object.entries(m).map(([source, target]) => ({ lang: "zh", fieldKey, source, target, origin: "seed" })));
   const inserted = await d.insert(dictionaryEntries).values(dictRows).onConflictDoNothing().returning({ id: dictionaryEntries.id });
@@ -111,6 +113,17 @@ export async function seed(opts?: { adminEmail?: string; adminPassword?: string;
       await tx.insert(recipes).values({ platformId: cb.id, version, json: withoutDocumentSteps(act.json, version, stale), isActive: true, note: `在 v${act.version} 基础上停止下载 ${stale.join("/")}（随笔不再使用）` });
     });
     log(`seed: cryobank recipe v${version} (-${stale.join("/")}) activated`);
+  }
+  // Purchase vials panel + removed-donor detection (once; derived from the active version, keeps admin edits).
+  const cbAll = await d.select().from(recipes).where(eq(recipes.platformId, cb.id));
+  const cbAct = cbAll.find((r) => r.isActive);
+  if (cbAct && !cbAll.some((r) => hasVialStep(r.json))) {
+    const version = Math.max(...cbAll.map((r) => r.version)) + 1;
+    await d.transaction(async (tx) => {
+      await tx.update(recipes).set({ isActive: false }).where(eq(recipes.platformId, cb.id));
+      await tx.insert(recipes).values({ platformId: cb.id, version, json: withVialStep(cbAct.json, version), isActive: true, note: `在 v${cbAct.version} 基础上新增采集 Purchase vials（各类型价格/库存），并识别已下架捐献者（404）` });
+    });
+    log(`seed: cryobank recipe v${version} (+purchase vials) activated`);
   }
 
   // Fairfax Cryobank: shares the core field keys with cryobank (see seed-data/fairfax.ts).

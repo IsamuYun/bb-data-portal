@@ -1,9 +1,10 @@
-import { and, db, desc, devices, eq, inArray, jobRuns, jobs, records, sql } from "@bb/db";
+import { and, db, desc, devices, eq, inArray, jobRuns, jobs, recipes, records, sql } from "@bb/db";
 import { jobResultRequest, type JobResultResponse } from "@bb/shared";
 import { authDevice, fail, isResponse, json, parseBody } from "@/lib/ext/auth";
 import { externalIdFromUrl } from "@/lib/import/parse";
 import { enqueueFromListing } from "@/lib/ext/enqueue";
 import { withFairfaxMedical } from "@/lib/fairfax/medical";
+import { withCryobankVials } from "@/lib/cryobank/vials";
 import { translateRecordSoon } from "@/lib/translate/records";
 
 export const runtime = "nodejs";
@@ -34,6 +35,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const isListing = body.enqueue !== undefined;
   // Raw page captures are parsed into record fields here (and again on boot when the parser changes).
   if (body.data && Array.isArray(body.data.medicalProfile)) body.data = withFairfaxMedical(body.data);
+  if (body.data) body.data = withCryobankVials(body.data);
   const externalId = isListing ? "" : job.externalId || (typeof body.data?.externalId === "string" ? body.data.externalId : "") || externalIdFromUrl(job.url);
   if (body.status === "done" && !job.dryRun && !isListing && !externalId) return fail("无法确定 externalId，记录无法入库", 400);
 
@@ -43,6 +45,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (body.status === "done" && !job.dryRun && /HTTP 40[13]\b|tier 2 account/i.test(logText)) {
     body.status = "auth_required";
     body.error = "站点登录已失效（下载报告被拒绝 401/403），请在 Chrome 中重新登录后在设备页“恢复”";
+  }
+
+  // The source page is gone (removed donor): do not retry, keep the record but mark it delisted.
+  const gone = body.status === "failed" && !job.dryRun && !isListing && externalId !== "" && (await isGone(job.platformId, body.recipeVersion, body.error));
+  if (gone) {
+    body.status = "skipped";
+    body.error = `来源页面已不存在（已下架），记录保留并标记为不可用：${body.error ?? ""}`;
   }
 
   const res = await d.transaction(async (tx) => {
@@ -63,7 +72,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         .values({ platformId: job.platformId, externalId, data: body.data ?? {}, sourceUrl: job.url, jobId: job.id, capturedAt: new Date() })
         .onConflictDoUpdate({
           target: [records.platformId, records.externalId],
-          set: { data: body.data ?? {}, sourceUrl: job.url, jobId: job.id, capturedAt: new Date(), version: sql`${records.version} + 1` },
+          set: { data: body.data ?? {}, sourceUrl: job.url, jobId: job.id, capturedAt: new Date(), delistedAt: null, version: sql`${records.version} + 1` },
         })
         .returning({ id: records.id });
       recordId = rec.id;
@@ -72,6 +81,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       jobStatus = job.attempts < job.maxAttempts ? "pending" : "failed";
     } else {
       jobStatus = body.status; // auth_required | skipped
+    }
+    if (gone) {
+      await tx
+        .update(records)
+        .set({ delistedAt: sql`coalesce(${records.delistedAt}, now())` })
+        .where(and(eq(records.platformId, job.platformId), eq(records.externalId, externalId)));
     }
     if (!isListing && !job.externalId && externalId) await tx.update(jobs).set({ externalId }).where(eq(jobs.id, job.id));
     await tx
@@ -94,4 +109,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Translate the new/updated record a few seconds later, once its reports (uploaded next) have been parsed too.
   if (res.recordId) translateRecordSoon(res.recordId);
   return json(res);
+}
+
+/** Whether a failed run's error matches the recipe's `gonePattern` (the version that ran, else the active one). */
+async function isGone(platformId: string, version: number | undefined, error: string | undefined) {
+  if (!error) return false;
+  const rows = await db()
+    .select({ json: recipes.json, isActive: recipes.isActive, version: recipes.version })
+    .from(recipes)
+    .where(eq(recipes.platformId, platformId));
+  const recipe = rows.find((r) => r.version === version) ?? rows.find((r) => r.isActive);
+  const pattern = recipe?.json.gonePattern;
+  if (!pattern) return false;
+  try {
+    return new RegExp(pattern, "i").test(error);
+  } catch {
+    return false;
+  }
 }

@@ -6,6 +6,7 @@ import { NativeSelect } from "@/components/common/native-select";
 import { PAGE_SIZE, Pagination, parsePage } from "@/components/common/pagination";
 import { JOB_STATUSES, JobStatusBadge, jobStatusLabel } from "@/components/common/status-badge";
 import { JobsTable } from "./jobs-table";
+import { CollectByIdForm } from "./collect-by-id-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cancelJobsAction, retryJobsAction } from "@/lib/actions/jobs";
@@ -54,7 +55,7 @@ export default async function JobsPage({ searchParams }: { searchParams: SP }) {
       .offset((page - 1) * PAGE_SIZE),
     d.select({ total: count() }).from(jobs).where(cond),
     d.select({ status: jobs.status, n: count() }).from(jobs).where(cond).groupBy(jobs.status),
-    d.select({ id: platforms.id, name: platforms.name }).from(platforms).orderBy(platforms.name),
+    d.select({ id: platforms.id, name: platforms.name, slug: platforms.slug }).from(platforms).orderBy(platforms.name),
     d.select({ id: datasets.id, name: datasets.name }).from(datasets).orderBy(desc(datasets.createdAt)),
   ]);
   const sc = Object.fromEntries(statusCounts.map((s) => [s.status, s.n])) as Record<string, number>;
@@ -89,6 +90,11 @@ export default async function JobsPage({ searchParams }: { searchParams: SP }) {
         </>
       }
     >
+      <CollectByIdForm
+        platforms={ps.map((p) => ({ id: p.id, name: p.name }))}
+        defaultPlatformId={ps.some((p) => p.id === f.platformId) ? f.platformId : (ps.find((p) => p.slug === "cryobank") ?? ps[0])?.id ?? ""}
+      />
+
       <form method="get" className="flex flex-wrap items-end gap-2">
         <NativeSelect name="platformId" defaultValue={f.platformId} aria-label="平台">
           <option value="">全部平台</option>

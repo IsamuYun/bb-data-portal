@@ -287,6 +287,8 @@ docker compose logs --tail 50 web
 docker image prune -f
 ```
 
+各次升级的专项步骤与验收见 `docs/upgrades/`（按日期命名）。
+
 回滚：`git checkout <上一个提交>` 后再 `docker compose up -d --build`；如果新版本已执行了数据库迁移且旧版本不兼容，用升级前的备份 `scripts/restore.sh` 恢复。
 
 **中国大陆机房构建**：Docker Hub 与 npm 可能很慢或不可达。给 Docker 配置镜像加速（`/etc/docker/daemon.json` 的 `registry-mirrors`，改后 `sudo systemctl restart docker`）；npm 可在 `docker/Dockerfile.web` 的依赖安装步骤前设置 `npm_config_registry=https://registry.npmmirror.com`。也可以在本机构建镜像后 `docker save | ssh deploy@服务器 docker load` 传过去。

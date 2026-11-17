@@ -2,7 +2,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { db, eq, inArray, media, platforms, records, type RecordManual } from "@bb/db";
+import { db, eq, inArray, media, records, type RecordManual } from "@bb/db";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { env } from "../env";
@@ -25,31 +25,6 @@ export async function deleteRecordsAction(formData: FormData) {
   );
   revalidatePath("/records");
   revalidatePath("/");
-}
-
-/** Re-parse the stored report PDFs with the current rules (cryobank: medical profile, questionnaire; Fairfax: genetic summary, photo set). No model. */
-export async function reparseMedicalAction(formData: FormData) {
-  await requireUser();
-  const id = String(formData.get("id") ?? "");
-  if (!id) throw new Error("缺少记录 id");
-  const [rec] = await db().select({ slug: platforms.slug }).from(records).innerJoin(platforms, eq(platforms.id, records.platformId)).where(eq(records.id, id)).limit(1);
-  if (!rec) throw new Error("记录不存在");
-  const cryobank = rec.slug === "cryobank";
-  const fairfax = rec.slug === "fairfax";
-  const { reparseMedicalReport } = await import("../medical/apply");
-  const { reparseDonorProfile } = await import("../donor-profile/apply");
-  const { reparseFairfaxGenetic } = await import("../fairfax/genetic-apply");
-  const { reparseFairfaxPhotoSet } = await import("../fairfax/photoset-apply");
-  // The parsers are bank-specific: Fairfax's medical fields come from its web page (re-derived at boot), not a PDF.
-  const [f, q, g, p] = await Promise.all([
-    cryobank ? reparseMedicalReport(id) : null,
-    cryobank ? reparseDonorProfile(id) : null,
-    fairfax ? reparseFairfaxGenetic(id) : null,
-    fairfax ? reparseFairfaxPhotoSet(id) : null,
-  ]);
-  if (!f && !q && !g && p === null) throw new Error("该记录没有可解析的报告 PDF（需用新版 Recipe 重新采集）");
-  revalidatePath(`/records/${id}`);
-  return { familyRows: f?.familyTable.length ?? 0, phrases: f?.medicalPhrases.length ?? 0, questionnaire: !!q, geneticTests: g?.geneticTests.length ?? null, portraits: p };
 }
 
 const manualCarriersInput = z.discriminatedUnion("mode", [

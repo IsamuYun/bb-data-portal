@@ -1,4 +1,4 @@
-import { eq, gte, inArray, isNull, records, sql, type CarrierStatus, type SQL } from "@bb/db";
+import { eq, gte, inArray, isNull, records, sql, type Availability, type CarrierStatus, type SQL } from "@bb/db";
 
 /**
  * Cross-source donor facets for the records list. Cryobank and FairFax store the same keys but in different
@@ -95,13 +95,23 @@ export const CARRIER: (FacetOption & { value: CarrierStatus })[] = [
 ];
 export const CARRIER_LABEL: Record<CarrierStatus, string> = { none: "未检出", carrier: "携带者", pending: "待整理", untested: "无检测" };
 
+/** 可用状态 filter: one status, or "unavailable" = sold out or delisted. */
+export const AVAIL: FacetOption[] = [
+  { value: "available", label: "可购买" },
+  { value: "unavailable", label: "不可用（售罄或已下架）" },
+  { value: "sold_out", label: "已售罄（试管数为 0）" },
+  { value: "delisted", label: "已下架（来源页已不存在）" },
+  { value: "unknown", label: "未知" },
+];
+export const AVAIL_LABEL: Record<Availability, string> = { available: "可购买", sold_out: "不可用·售罄", delisted: "不可用·已下架", unknown: "未知" };
+
 /** 颜值 filter: a minimum score, or "unrated". */
 export const LOOKS: FacetOption[] = [
   ...[9, 8, 7, 6, 5].map((n) => ({ value: String(n), label: `${n} 分及以上` })),
   { value: "unrated", label: "未评分" },
 ];
 
-export type FacetFilters = { heightMin: number | null; heightMax: number | null; education: string; complexion: string; race: string; eye: string; carrier: string; looks: string };
+export type FacetFilters = { heightMin: number | null; heightMax: number | null; education: string; complexion: string; race: string; eye: string; carrier: string; looks: string; avail: string };
 
 const pick = (v: string, opts: FacetOption[]) => (opts.some((o) => o.value === v) ? v : "");
 const cm = (v: string) => {
@@ -119,6 +129,7 @@ export function parseFacets(get: (k: string) => string): FacetFilters {
     eye: pick(get("eye"), EYE),
     carrier: pick(get("gene"), CARRIER),
     looks: pick(get("looks"), LOOKS),
+    avail: pick(get("avail"), AVAIL),
   };
 }
 
@@ -133,6 +144,7 @@ export function facetParams(f: FacetFilters): Record<string, string> {
     eye: f.eye,
     gene: f.carrier,
     looks: f.looks,
+    avail: f.avail,
   };
 }
 
@@ -158,5 +170,7 @@ export function facetWhere(f: FacetFilters, platforms: { id: string; slug: strin
   if (f.carrier) w.push(eq(records.carrierStatus, f.carrier as CarrierStatus));
   if (f.looks === "unrated") w.push(isNull(records.looks));
   else if (f.looks) w.push(gte(records.looks, Number(f.looks)));
+  if (f.avail === "unavailable") w.push(inArray(records.availability, ["sold_out", "delisted"]));
+  else if (f.avail) w.push(eq(records.availability, f.avail as Availability));
   return w;
 }

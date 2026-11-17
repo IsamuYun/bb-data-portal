@@ -102,6 +102,12 @@ export const recipeSchema = z.object({
     .default({ delayMs: [3000, 8000], timeoutMs: 30000, maxRetries: 2 }),
   steps: z.array(step).min(1),
   /**
+   * Regex (case-insensitive) tested on the server against a failed run's error, which names the page title (see
+   * `waitFor`). A hit means the source page no longer exists (e.g. a removed donor → "Page Not Found"): the job is
+   * skipped instead of retried and the existing record is kept but marked delisted.
+   */
+  gonePattern: z.string().optional(),
+  /**
    * Optional listing mode: a job whose URL matches `listing.match` (e.g. a search results page) runs these steps
    * instead, normally `paginate` + `enqueue`, and produces new jobs rather than a record.
    */

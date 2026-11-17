@@ -179,6 +179,25 @@ const carrierStatusSql = sql`case
   else 'untested'
 end`;
 
+/**
+ * Whether the donor can still be bought, per record: `delisted` = the source page is gone (404 on re-collection; the
+ * record is kept, see `delistedAt`), `sold_out` = Purchase vials shows no stock, `available` = at least one vial type
+ * in stock, `unknown` = not determinable (no vial data captured yet, or the vial panel is hidden behind a form).
+ * `vialStock` is written by the capture normalizer (apps/web/src/lib/cryobank/vials.ts); older captures fall back to
+ * the single `availableVials` value.
+ */
+export const AVAILABILITIES = ["available", "sold_out", "delisted", "unknown"] as const;
+export type Availability = (typeof AVAILABILITIES)[number];
+const availabilitySql = sql`case
+  when delisted_at is not null then 'delisted'
+  when data->>'vialStock' = 'in_stock' then 'available'
+  when data->>'vialStock' = 'sold_out' then 'sold_out'
+  when data->>'vialStock' = 'unknown' then 'unknown'
+  when coalesce(data->>'availableVials', '') ~ '[1-9]' then 'available'
+  when btrim(coalesce(data->>'availableVials', '')) = '0' then 'sold_out'
+  else 'unknown'
+end`;
+
 export const records = pgTable(
   "records",
   {
@@ -199,6 +218,9 @@ export const records = pgTable(
     carrierStatus: text("carrier_status").$type<CarrierStatus>().generatedAlwaysAs(carrierStatusSql).notNull(),
     /** Hand-given looks score (颜值), 1–10; null = not rated. */
     looks: smallint("looks"),
+    /** First time a re-collection found the source page gone (404); cleared when a later capture succeeds. */
+    delistedAt: timestamp("delisted_at", { withTimezone: true }),
+    availability: text("availability").$type<Availability>().generatedAlwaysAs(availabilitySql).notNull(),
     sourceUrl: text("source_url").notNull(),
     jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
@@ -208,6 +230,7 @@ export const records = pgTable(
     uniqueIndex("records_platform_external_uq").on(t.platformId, t.externalId),
     uniqueIndex("records_seq_uq").on(t.seq),
     index("records_carrier_status_idx").on(t.carrierStatus),
+    index("records_availability_idx").on(t.availability),
     check("records_looks_range", sql`${t.looks} between 1 and 10`),
   ],
 );

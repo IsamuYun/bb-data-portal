@@ -1,7 +1,7 @@
 import type { PageBlock } from "@bb/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { asc, db, eq, media, platforms, records } from "@bb/db";
+import { and, asc, db, desc, eq, jobs, media, platforms, records } from "@bb/db";
 import { loadTranslations } from "@/lib/translate/records";
 import { PageShell } from "@/components/layout/page-shell";
 import { Button } from "@/components/ui/button";
@@ -10,9 +10,9 @@ import { fmtDate } from "@/lib/format";
 import { cellText } from "../cell";
 import { DOC_FIELDS } from "@/lib/media/store";
 import { MediaManager, type MediaField, type MediaGroup } from "./media-manager";
-import { ReparseMedicalButton } from "./reparse-button";
+import { UpdateRecordButton } from "./update-button";
 import { LooksEditor } from "./looks-editor";
-import { CARRIER_LABEL } from "@/lib/records/facets";
+import { AVAIL_LABEL, CARRIER_LABEL } from "@/lib/records/facets";
 import { needsManualCarriers } from "@/lib/profile/model";
 
 /** Display names for report fields of other platforms (not upload targets): Fairfax Genetic Testing. */
@@ -30,7 +30,17 @@ export default async function RecordDetailPage({ params }: { params: Promise<{ i
     .where(eq(records.id, id))
     .limit(1);
   if (!r) notFound();
-  const [ms, tr] = await Promise.all([d.select().from(media).where(eq(media.recordId, id)).orderBy(asc(media.position)), loadTranslations([id])]);
+  const [ms, tr, [job]] = await Promise.all([
+    d.select().from(media).where(eq(media.recordId, id)).orderBy(asc(media.position)),
+    loadTranslations([id]),
+    // Latest capture job of this donor: drives the "更新数据" button state.
+    d
+      .select({ status: jobs.status, lastError: jobs.lastError })
+      .from(jobs)
+      .where(and(eq(jobs.platformId, r.record.platformId), eq(jobs.externalId, r.record.externalId), eq(jobs.dryRun, false)))
+      .orderBy(desc(jobs.updatedAt))
+      .limit(1),
+  ]);
   const zh = tr.get(id);
   const schema = r.platform.fieldSchema;
   const known = new Set(schema.map((f) => f.key));
@@ -53,7 +63,7 @@ export default async function RecordDetailPage({ params }: { params: Promise<{ i
   return (
     <PageShell
       title={`#${r.record.seq} · ${r.platform.name} ${r.record.externalId}`}
-      description={`来源：${r.platform.name}（来源 ID ${r.record.externalId}）· v${r.record.version} · 采集于 ${fmtDate(r.record.capturedAt)} · 基因筛查：${CARRIER_LABEL[r.record.carrierStatus]}`}
+      description={`来源：${r.platform.name}（来源 ID ${r.record.externalId}）· v${r.record.version} · 采集于 ${fmtDate(r.record.capturedAt)} · 基因筛查：${CARRIER_LABEL[r.record.carrierStatus]} · 可用状态：${AVAIL_LABEL[r.record.availability]}${r.record.delistedAt ? `（${fmtDate(r.record.delistedAt)} 发现来源页已不存在）` : ""}`}
       actions={
         <>
           <LooksEditor id={r.record.id} value={r.record.looks} />
@@ -64,8 +74,7 @@ export default async function RecordDetailPage({ params }: { params: Promise<{ i
           <Button variant="outline" render={<a href={`/api/records/${r.record.id}/profile?format=html`} />}>
             导出资料 HTML
           </Button>
-          {ms.some((m) => (r.platform.slug === "cryobank" ? ["medicalReport", "profileReport"] : r.platform.slug === "fairfax" ? ["geneticReport", "photoSetPdf"] : []).includes(m.fieldKey ?? "") ||
-            (r.platform.slug === "fairfax" && m.fieldKey === "adulthoodPhotos" && m.mime === "application/pdf")) ? <ReparseMedicalButton id={r.record.id} /> : null}
+          <UpdateRecordButton id={r.record.id} jobStatus={job?.status ?? null} lastError={job?.lastError ?? null} />
           <Button variant="outline" render={<a href={r.record.sourceUrl} target="_blank" rel="noreferrer" />}>
             打开来源页
           </Button>
